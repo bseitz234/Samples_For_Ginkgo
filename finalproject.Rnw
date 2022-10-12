@@ -1,0 +1,294 @@
+% Document information:
+\documentclass[10pt]{article}
+\author{Brian Seitz}
+\title{Bioinformatics Final Project}
+\date{\today\vspace{2em}}
+
+% Attach packages:
+\usepackage{titlesec}
+\usepackage{titling}
+\usepackage{fontspec}
+\usepackage[margin=0.75in]{geometry}
+\usepackage{polyglossia}
+\usepackage[autostyle, english=american]{csquotes}
+\usepackage[backend=bibtex, style=authoryear, citestyle=authoryear]{biblatex}
+
+% Specify bibliography file:
+\addbibresource{bioinformatics_final.bib}
+
+% Specify fonts and formatting:
+\newfontfamily\headingfont[]{Helvetica Neue}
+\titleformat*{\section}{\Large\headingfont}
+\titleformat*{\subsection}{\large\headingfont}
+\titleformat*{\subsubsection}{\large\headingfont}
+\renewcommand{\maketitlehooka}{\headingfont}
+\setmainfont[]{Georgia}
+
+\setlength\fboxsep{3mm}
+
+\setmainlanguage{english}
+
+\begin{document}
+\maketitle
+
+% First set global chunk options for Knitr:
+<<chunk_settings, eval = TRUE, echo = FALSE>>=
+opts_chunk$set(eval = TRUE, echo = TRUE, message = FALSE, warning = FALSE,
+               fig.width = 7.5, fig.align = "center")
+@
+
+<<Load_Packages, echo = FALSE>>=
+### Load Required Packages:
+### For nicer manipulation of data.frames:
+library(tidyr)
+library(dplyr)
+library(ggplot2)
+
+### Packages with data:
+# library(ALL)
+# data(ALL)
+# library("annaffy")
+# library("hgu95av2.db")
+# library(multtest)
+# data(golub)
+
+### Packages with stat tests:
+# library(lmtest)
+# library(nortest)
+library(genefilter)
+# library(limma)
+# library(pvclust)
+
+### Packages for going fast: 
+library(parallel)
+library(foreach)
+library(doMC)
+
+# LaTeX sanitizing function (to deal with underscores, other problems)
+latexSanitize <- function (x) {
+  output <- gsub("_", "\\\\_", x)
+  output <- gsub("&", "\\\\&", output)
+  output <- gsub("%", "\\\\%", output)
+  return(output)
+}
+
+# Function to trim leading Xs inserted into column names: 
+trim_x <- function(x) {
+  if(grepl("^X", x)) {
+  return(substr(x, 2, nchar(x)))
+  } else return(x)
+}
+
+# How many cores to use?
+num_cores <- detectCores()
+if(num_cores >= 2) {num_cores <- num_cores - 1}
+
+# Color palatte for graphs:
+colorPalette <- c("#0072B2", "#E69F00", "#56B4E9", "#009E73", 
+                  "#F0E442", "#000000", "#D55E00", "#CC79A7")
+@
+\section*{Abstract}
+Sporulation in the budding yeast \textit{Saccharomyces cerevisiae} represents the yeast's meiotic process, and results in the production of four haploid spores from one diploid parent cell. The yeast undergo sporulation in conditions of starvation: unfermentable carbon, and low nitrogen. Sporulation represents a precisely controlled transcriptional program, with specific transcriptional profiles at distinct timepoints throughout meiosis and spore packaging. Some of these genes are known to also be required during mitotic (vegetative) division, such as those in the mitotic exit network (MEN). Others, such as the sporulation-specific kinase SPS1, are unique to sporulation. Our lab has evidence that CDC15- a hippo-like kinase and member of the MEN pathway- phosphorylates SPS1 in sporulation, suggesting alternative signaling by this highly-conserved mitotic factor. Here, I investigate other possible proteins that may interact with CDC15 and/or SPS1 during sporulation, based on their transcriptional profiles.
+
+\section*{Background and Objectives}
+\subsection*{Scientific Background}
+The budding yeast \textit{Saccharomyces cerevisiae} undergo sporulation under specific starvation conditions of low nitrogen and an absence of fermentable carbon. This process is controlled by a specific gene expression program, and constitutes the meiotic program for the yeast \autocite{Neiman:2011kf}. To ensure that the spores are the proper shape and size, the four meiotic products are enclosed in membranes that are synthesized \textit{de novo}, known as Prospore Membranes (PSMs) \autocite{Neiman:1998tu}. These PSMs serve as templates for the deposition of a multi-layered spore wall, which protects the spore and allows it to survive until more favorable growth conditions return.
+
+This process requires certain conserved pathways, including signaling by the Mitotic Exit Network (MEN), which constitutes the yeast Hippo signaling pathway. CDC15, a kinase that acts upstream of the NDR/LATS kinases Dbf2 and Dbf20, is known to be required for proper spore formation \autocites{PabloHernando:2007cp}{Paulissen:2016gj}
+\subsection*{The Dataset}
+
+The dataset I plan to analyzed was published in \textit{Science} in 1998 by Chu \textit{et al.}, in a work titled \enquote{The Transcriptional Program of Sporulation in Budding Yeast} \autocite{Chu:1998tm} . The dataset is publicly available at: \begin{center} \underline{\texttt{http://cmgm.stanford.edu/pbrown/sporulation/additional/spospread.txt}} \end{center}
+<<dataset_download, eval = TRUE, echo = FALSE>>=
+# sporulation_data <- read.delim(
+#  file = "http://cmgm.stanford.edu/pbrown/sporulation/additional/spospread.txt",
+#  header = TRUE,
+#  sep = "\t", quote = "\"")
+setwd("~/R_Projects/Bioinformatics/final")
+sporulation_data <- read.delim(
+  file = "spospread.txt",
+  header = TRUE,
+  sep = "\t", quote = "\"")
+expression_matrix <- data.matrix(sporulation_data[70:76])
+@
+The dataset contains expression data for \Sexpr{nrow(sporulation_data)} genes, and is taken as a timecourse throughout the yeast sporulation program. The timepoints chosen were at 0 hours (representative of the vegetative transcriptome), 0.5 hours, 2 hours (early meiosis), 5 hours (late meiosis), 7 hours, 9 hours (late sporulation), and 11.5 hours (sporulation generally finished). The data is presented as a fold-change relative to wild type vegetative expression of each gene. 
+
+\section*{Computational Methods}
+To identify potential genes of interest, I have used the Bioconductor function \texttt{genefinder()}, to identify the genes that cluster most similarly with CDC15 and SPS1 in the Chu dataset. I have produced heatmaps to visualize the expression patterns using hierarchical clustering and the \texttt{ggplot2} package.  
+
+\section*{Results}
+
+<<Hierarchical_Clustering, echo = FALSE, fig.height = 5>>=
+whole_cluster <- hclust(dist(sporulation_data[70:76], method = "euclidean"),
+                        method = "complete")
+plot(whole_cluster,
+     lwd = 2, col = "black",
+     ylab="Distance", xlab="Genes",
+     main = "Clustering of All Gene Expression in Sporulation",
+     hang = -1, sub = NA, axes = FALSE)
+axis(side = 2, at = seq(0, 25, 5), col = "#0072B2", labels = TRUE, lwd = 2)
+@
+The tree produced by hierarchical clustering of the entire dataset. There appears to be some separation of clusters, which is in agreement with the field's consensus of distinct transcriptional profiles for genes with roles at various timepoints in sporulation.
+
+<<SPS1_Clustering, echo = FALSE>>=
+# Find SPS1 in dataset:
+sps1 <- grep("sps1$", sporulation_data$SGD.Name, ignore.case = TRUE)
+# Use genefinder to find genes most similarly expressed:
+sps1_like <- genefinder(expression_matrix, sps1, numResults = 50)[[1]]
+# Make data frame to cluster:
+cluster.data <- expression_matrix[c(sps1, sps1_like$indices),]
+# Name rows: 
+# Figure out what genes they actually are:
+sps1_like.names <- as.character(sporulation_data[c(sps1, sps1_like$indices),
+                                                 "SGD.Name"])
+# If they don't have a gene name, get the Systematic name:
+sps1_like.orfs <- as.character(sporulation_data$ORF[
+  c(sps1, sps1_like$indices)[which(sps1_like.names == "")]])
+sps1_like.names[which(sps1_like.names == "")] <- sps1_like.orfs
+rownames(cluster.data) <- sps1_like.names
+sps1_cluster <- hclust(dist(cluster.data, method = "euclidean"),
+                        method = "complete")
+plot(sps1_cluster,
+     lwd = 2, col = "black",
+     ylab="Distance", xlab="Genes",
+     main = "Clustering of SPS1-like Gene Expression in Sporulation",
+     hang = -1, sub = NA, axes = FALSE)
+axis(side = 2, at = seq(0, 1, .25), col = "#0072B2", labels = TRUE, lwd = 2)
+@
+Focusing just on the genes that were identified by \texttt{genefinder()}, it is apparent that many of the genes that are the most similar to SPS1 are previously undescribed ORFs (the only name available is the systematic ORF ID; they do not have a descriptive gene name). However, many of these genes are known sporulation genes, including SPR3 (meiosis-specific septin), SSP2 and SPS4 (sporulation-specific genes), and ISC10 (meiosis-specific transcription factor). 
+
+<<CDC15_Clustering, echo = FALSE>>=
+# Find SPS1 in dataset:
+cdc15 <- grep("cdc15$", sporulation_data$SGD.Name, ignore.case = TRUE)
+# Use genefinder to find genes most similarly expressed:
+cdc15_like <- genefinder(expression_matrix, cdc15, numResults = 50)[[1]]
+# Make data frame to cluster:
+cluster.data <- expression_matrix[c(cdc15, cdc15_like$indices),]
+# Name rows: 
+# Figure out what genes they actually are:
+cdc15_like.names <- as.character(sporulation_data[c(cdc15, cdc15_like$indices),
+                                                 "SGD.Name"])
+# If they don't have a gene name, get the Systematic name:
+cdc15_like.orfs <- as.character(sporulation_data$ORF[
+  c(cdc15, cdc15_like$indices)[which(cdc15_like.names == "")]])
+cdc15_like.names[which(cdc15_like.names == "")] <- cdc15_like.orfs
+rownames(cluster.data) <- cdc15_like.names
+cdc15_cluster <- hclust(dist(cluster.data, method = "euclidean"),
+                        method = "complete")
+plot(cdc15_cluster,
+     lwd = 2, col = "black",
+     ylab="Distance", xlab="Genes",
+     main = "Clustering of CDC15-like Gene Expression in Sporulation",
+     hang = -1, sub = NA, axes = FALSE)
+axis(side = 2, at = seq(0, 1, .25), col = "#0072B2", labels = TRUE, lwd = 2)
+@
+Similar trends are seen in the genes that cluster with CDC15: there are many previously undescribed ORFs, but the genes that are described include SEC66 (secretion pathway, required for prospore membrane growth) and RAD6 and RAD18 (DNA replication and damage repair).   
+ 
+<<SPS1_Heatmap, echo = FALSE, fig.height = 9, fig.width = 8>>=
+
+# Filter expression data to just these genes, put in a data.frame:
+heatmap.data <- data.frame(expression_matrix[c(sps1, sps1_like$indices),])
+# Figure out what genes they actually are:
+sps1_like.names <- as.character(sporulation_data[c(sps1, sps1_like$indices),
+                                                 "SGD.Name"])
+# If they don't have a gene name, get the Systematic name:
+sps1_like.orfs <- as.character(sporulation_data$ORF[
+  c(sps1, sps1_like$indices)[which(sps1_like.names == "")]])
+sps1_like.names[which(sps1_like.names == "")] <- sps1_like.orfs
+# Assign names to the data:
+#rownames(heatmap.data) <- make.unique(sps1_like.names, sep = "-")
+colnames(heatmap.data) <- c("X0_Hours", "X0.5_Hours", "X2_Hours", "X5_Hours", 
+                            "X7_Hours", "X9_Hours", "X11.5_Hours")
+# Determine the clustering and sort the data.frame:
+sps1_cluster_order <- hclust(dist(heatmap.data, method = "euclidean"),
+                method = "complete")$order
+heatmap.data <- cbind("Gene" = make.unique(sps1_like.names, sep = "-"),
+                      heatmap.data,
+                      "Cluster_order" = sps1_cluster_order)
+heatmap.data <- dplyr::select(dplyr::arrange(heatmap.data, Cluster_order),
+                              - Cluster_order)
+# Tidy up the data.frame:
+heatmap.data <- gather(heatmap.data, Time, Expression, X0_Hours:X11.5_Hours)
+heatmap.data$Time <- factor(x = heatmap.data$Time,
+       levels = c("X0_Hours", "X0.5_Hours", "X2_Hours", "X5_Hours", 
+                            "X7_Hours", "X9_Hours", "X11.5_Hours"),
+       labels = c("0 Hours", "0.5 Hours", "2 Hours", "5 Hours", "7 Hours",
+                  "9 Hours", "11.5 Hours"),
+       ordered = TRUE)
+heatmap.data$Gene <- factor(x = heatmap.data$Gene,
+                            levels = make.unique(sps1_like.names, sep = "-"))
+# Finally make the actual heatmap:  
+ggplot(heatmap.data, aes(x = Time, y = Gene)) +
+  geom_tile(aes(fill = Expression)) + 
+  scale_fill_gradient2(low = "navy", high = "red",
+                       mid = "white", midpoint = .50, limits = c(0,2.25)) +
+  labs(x = "Time", y = "Gene", 
+       title = "Heatmap of Expression of Sps1-like Genes in Sporulation")
+@
+
+The heatmap indicates that SPS1-like genes are expressed more highly during early sporulation, and transcription decreases once meiosis is complete. This is inconsistent with known requirements for SPS1 in meiotic spindle disassembly and prospore membrane closure\autocite{Paulissen:2016gj}. It may suggest that SPS1 is required for events later in sporulation, but that it carries out this role through other proteins that delay the phenotype from the timepoints at which SPS1 is actually active.
+
+<<CDC15_Heatmap, echo = FALSE, fig.height = 9, fig.width = 8>>=
+
+# Filter expression data to just these genes, put in a data.frame:
+heatmap.data <- data.frame(expression_matrix[c(cdc15, cdc15_like$indices),])
+# Figure out what genes they actually are:
+cdc15_like.names <- as.character(sporulation_data[c(cdc15, cdc15_like$indices),
+                                                 "SGD.Name"])
+# If they don't have a gene name, get the Systematic name:
+cdc15_like.orfs <- as.character(sporulation_data$ORF[
+  c(cdc15, cdc15_like$indices)[which(cdc15_like.names == "")]])
+cdc15_like.names[which(cdc15_like.names == "")] <- cdc15_like.orfs
+# Assign names to the data:
+#rownames(heatmap.data) <- make.unique(cdc15_like.names, sep = "-")
+colnames(heatmap.data) <- c("X0_Hours", "X0.5_Hours", "X2_Hours", "X5_Hours", 
+                            "X7_Hours", "X9_Hours", "X11.5_Hours")
+# Determine the clustering and sort the data.frame:
+cdc15_cluster_order <- hclust(dist(heatmap.data, method = "euclidean"),
+                method = "complete")$order
+heatmap.data <- cbind("Gene" = make.unique(cdc15_like.names, sep = "-"),
+                      heatmap.data,
+                      "Cluster_order" = cdc15_cluster_order)
+heatmap.data <- dplyr::select(dplyr::arrange(heatmap.data, Cluster_order),
+                              - Cluster_order)
+# Tidy up the data.frame:
+heatmap.data <- gather(heatmap.data, Time, Expression, X0_Hours:X11.5_Hours)
+heatmap.data$Time <- factor(x = heatmap.data$Time,
+       levels = c("X0_Hours", "X0.5_Hours", "X2_Hours", "X5_Hours", 
+                            "X7_Hours", "X9_Hours", "X11.5_Hours"),
+       labels = c("0 Hours", "0.5 Hours", "2 Hours", "5 Hours", "7 Hours",
+                  "9 Hours", "11.5 Hours"),
+       ordered = TRUE)
+heatmap.data$Gene <- factor(x = heatmap.data$Gene,
+                            levels = make.unique(cdc15_like.names, sep = "-"))
+# Finally make the actual heatmap:  
+ggplot(heatmap.data, aes(x = Time, y = Gene)) +
+  geom_tile(aes(fill = Expression)) + 
+  scale_fill_gradient2(low = "navy", high = "red",
+                       mid = "white", midpoint = .5, limits = c(0,2.25)) +
+  labs(x = "Time", y = "Gene", 
+       title = "Heatmap of Expression of Cdc15-like Genes in Sporulation")
+@
+
+We can see from the heatmap of CDC15 expression that CDC15-like genes are enriched in sporulation relative to vegetative growth, at a fairly constant level. This suggests that SPS1 and CDC15, although they physically interact, have rather different expression patterns in sporulation. This may indicate that the interaction is not unique, and that CDC15 has other roles in sporulation besides phosphorylation of SPS1 early in sporulation. 
+
+<<CDC15_SPS1_Overlap, echo = FALSE>>=
+double_similar <- intersect(cdc15_like.names, sps1_like.names)
+@
+
+There are \Sexpr{length(double_similar)} genes in both the SPS1-like and CDC15-like lists. This further substantiates the notion that these genes have distinct expression patterns, despite their demonstrated interaction.
+     
+\section*{Discussion and Conclusions}
+
+Understanding the process of yeast sporulation holds several areas of greater biological relevance. Primarily, the process of closing PSMs and forming spores represents the yeast meiotic cytokinetic event. This is a process that happens in all eukaryotic organisms that undergo meiosis, including mammalian cells and especially humans. Understanding meiosis can allow us to better treat human infertility, since the two are inextricably linked \autocite{Handel:2010kk}.
+
+Furthermore, since many of the genes I am interested in are homologous to members of the Hippo signaling pathway, this research has broader relevance even than meiosis. Hippo signaling is involved in sensing of mechanical tension in higher eukaryotes, and may play a role in linking of spindle tension to cytokinesis. \autocite{Hergovich:2017bv}. Many types of cancers have been known to demonstrate abberrant Hippo activity to continue to proliferate despite physical compression \autocite{Harvey:2013jx}, and therefore a better understanding of Hippo activity in yeast can contribute to an understanding of cancer biology as well. 
+
+Signaling by the MEN is very well categorized during yeast vegetative growth and mitotic divisions. However, meiosis is more poorly understood, and has the potential to improve our understanding of these signaling pathways, which will allow the development of new therapies for pathway dysfunction in diseases as disparate as infertility and cancer. Novel protein-protein interactions provide new drug targets, and identification of novel pathway components can provide insight into how the MEN and Hippo signaling can be perturbed in the first place. 
+
+\section*{Future Work}
+
+To further investigate the protein-protein interactions that take place during \textit{S. cerevisiae} sporulation, I plan to attempt to Co-IP SPS1 and the genes that clustered most closely with it by hierarchical clustering. I will do the same thing with CDC15 and its most similar genes. This will be done by C-terminally epitope tagging, and using the epitope to identify the proteins. This way, I can confirm interactions with even the previously undescribed ORFs, if they really exist. To confirm that these genes are important in sporulation, I will knock them out using established yeast techniques\autocite{Gardner:2014bo}. 
+
+\printbibliography
+
+\end{document}
